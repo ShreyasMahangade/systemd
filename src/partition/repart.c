@@ -558,7 +558,7 @@ static Partition* partition_unlink_and_free(Context *context, Partition *p) {
 
 DEFINE_TRIVIAL_CLEANUP_FUNC(Partition*, partition_free);
 
-static Context *context_new(sd_id128_t seed) {
+static Context* context_new(sd_id128_t seed) {
         Context *context;
 
         context = new(Context, 1);
@@ -585,7 +585,7 @@ static void context_free_free_areas(Context *context) {
         context->n_free_areas = 0;
 }
 
-static Context *context_free(Context *context) {
+static Context* context_free(Context *context) {
         if (!context)
                 return NULL;
 
@@ -1898,6 +1898,34 @@ static int config_parse_encrypted_volume(
 static DEFINE_CONFIG_PARSE_ENUM_WITH_DEFAULT(config_parse_verity, verity_mode, VerityMode, VERITY_OFF, "Invalid verity mode");
 static DEFINE_CONFIG_PARSE_ENUM_WITH_DEFAULT(config_parse_minimize, minimize_mode, MinimizeMode, MINIMIZE_OFF, "Invalid minimize mode");
 
+static int partition_finalize_fstype(Partition *p, const char *path) {
+        _cleanup_free_ char *e = NULL, *upper = NULL;
+
+        assert(p);
+        assert(path);
+
+        if (!gpt_partition_type_has_filesystem(p->type))
+                return 0;
+
+        upper = strdup(partition_designator_to_string(p->type.designator));
+        if (!upper)
+                return log_oom();
+
+        e = strjoin("SYSTEMD_REPART_OVERRIDE_FSTYPE_", string_replace_char(ascii_strupper(upper), '-', '_'));
+        if (!e)
+                return log_oom();
+
+        const char *v = secure_getenv(e);
+        if (!v || streq(p->format, v))
+                return 0;
+
+        log_syntax(NULL, LOG_NOTICE, path, 1, 0,
+                   "Overriding defined file system type '%s' for '%s' partition with '%s'.",
+                   p->format, partition_designator_to_string(p->type.designator), v);
+
+        return free_and_strdup_warn(&p->format, v);
+}
+
 static int partition_read_definition(Partition *p, const char *path, const char *const *conf_file_dirs) {
 
         ConfigTableItem table[] = {
@@ -2086,6 +2114,10 @@ static int partition_read_definition(Partition *p, const char *path, const char 
                 p->split_name_format = s;
         } else if (streq(p->split_name_format, "-"))
                 p->split_name_format = mfree(p->split_name_format);
+
+        r = partition_finalize_fstype(p, path);
+        if (r < 0)
+                return r;
 
         return 1;
 }
@@ -3011,6 +3043,10 @@ static int context_dump_partitions(Context *context) {
         if (!t)
                 return log_oom();
 
+        /* Starting in v257, these fields would be automatically formatted with underscores. This would have
+         * been a breaking change, so to avoid that let's hard-code their original names. */
+        table_set_json_field_name(t, 15, "drop-in_files");
+
         if (!DEBUG_LOGGING) {
                 if (arg_json_format_flags & SD_JSON_FORMAT_OFF)
                         (void) table_set_display(t, (size_t) 0, (size_t) 1, (size_t) 2, (size_t) 3, (size_t) 4,
@@ -3742,7 +3778,7 @@ static const char* partition_target_path(PartitionTarget *t) {
         return t->path;
 }
 
-static PartitionTarget *partition_target_free(PartitionTarget *t) {
+static PartitionTarget* partition_target_free(PartitionTarget *t) {
         if (!t)
                 return NULL;
 
